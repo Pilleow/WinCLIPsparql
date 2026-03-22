@@ -235,11 +235,11 @@ class WinCLIPAdapter:
 
         return raw_arr, norm_arr.astype(np.float32)
 
-    def make_mask(self, heatmap: np.ndarray) -> np.ndarray:
+    def make_mask(self, heatmap: np.ndarray, k: float = 2) -> np.ndarray:
         """
         Create a binary mask from the normalized heatmap using percentile thresholding.
         """
-        thr = np.percentile(heatmap, self.mask_percentile)
+        thr = heatmap.mean() + k * heatmap.std()
         mask = (heatmap >= thr).astype(np.uint8) * 255
         return mask
 
@@ -260,12 +260,8 @@ class WinCLIPAdapter:
         image = image.resize((heatmap.shape[1], heatmap.shape[0]))
         image_np = np.asarray(image).astype(np.uint8)
 
-        stem = Path(image_path).stem
-
         mask = self.make_mask(heatmap)
         mask_bool = mask > 0
-
-        border = np.zeros_like(mask_bool, dtype=bool)
 
         h, w = mask_bool.shape
         eroded = np.zeros_like(mask_bool, dtype=bool)

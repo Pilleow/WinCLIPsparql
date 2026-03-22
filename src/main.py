@@ -5,16 +5,16 @@ from vision.winclip_adapter import WinCLIPAdapter
 
 
 def main():
-    image_path = "data/input/bottle/broken_small/001.png"
+    class_name = "transistor"
+    image_path = f"data/input/{class_name}/misplaced/002.png"
     output_dir = "data/output"
-    class_name = "bottle"
 
     good_images = [
-        "data/input/bottle/good/000.png",
-        "data/input/bottle/good/001.png",
-        "data/input/bottle/good/002.png",
-        "data/input/bottle/good/003.png",
-        "data/input/bottle/good/004.png",
+        f"data/input/{class_name}/good/000.png",
+        f"data/input/{class_name}/good/001.png",
+        f"data/input/{class_name}/good/002.png",
+        f"data/input/{class_name}/good/003.png",
+        f"data/input/{class_name}/good/004.png",
     ]
 
     adapter = WinCLIPAdapter(
