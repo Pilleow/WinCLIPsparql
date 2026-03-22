@@ -9,6 +9,21 @@ from PIL import Image
 
 
 class WinCLIPAdapter:
+    """
+    Thin wrapper around the original caoyunkang/WinClip implementation.
+
+    Responsibilities:
+    - load the original WinClipAD model
+    - use its built-in compositional prompt ensemble via build_text_feature_gallery()
+    - optionally build few-shot image gallery
+    - run inference on a single image
+    - return a consistent output format for the rest of the project
+
+    Notes:
+    - Prompt ensembling is already implemented inside WinClipAD.build_text_feature_gallery().
+    - This adapter should stay lightweight and not duplicate WinCLIP internals.
+    """
+
     def __init__(
         self,
         repo_path: str = "external/WinClip",
@@ -23,6 +38,7 @@ class WinCLIPAdapter:
         mask_percentile: float = 90.0,
         device: Optional[str] = None,
         use_cpu: bool = False,
+        debug: bool = True,
     ):
         self.repo_path = Path(repo_path).resolve()
         self.dataset = dataset
@@ -34,6 +50,7 @@ class WinCLIPAdapter:
         self.pretrained_dataset = pretrained_dataset
         self.image_threshold = image_threshold
         self.mask_percentile = mask_percentile
+        self.debug = debug
 
         if device is None:
             if torch.cuda.is_available() and not use_cpu:
@@ -45,21 +62,34 @@ class WinCLIPAdapter:
 
         self._model = None
         self._transform = None
+        self.WinClipAD = None
 
         self._import_winclip_code()
         self._build_model()
 
+    def _log(self, *args) -> None:
+        if self.debug:
+            print(*args)
+
     def _import_winclip_code(self) -> None:
         if not self.repo_path.exists():
             raise FileNotFoundError(
-                f"WinClip repo not found at: {self.repo_path}"
+                f"WinClip repo not found at: {self.repo_path}. "
+                f"Clone https://github.com/caoyunkang/WinClip.git into external/WinClip"
             )
 
         repo_str = str(self.repo_path)
         if repo_str not in sys.path:
             sys.path.insert(0, repo_str)
 
-        from WinCLIP import WinClipAD  # type: ignore
+        try:
+            from WinCLIP import WinClipAD  # type: ignore
+        except ImportError as e:
+            raise ImportError(
+                "Could not import WinClipAD from external/WinClip. "
+                "Check that the original repo is cloned correctly and its dependencies are installed."
+            ) from e
+
         self.WinClipAD = WinClipAD
 
     def _build_model(self) -> None:
@@ -90,13 +120,24 @@ class WinCLIPAdapter:
         self._model = self.WinClipAD(**kwargs).to(self.device)
         self._model.eval_mode()
         self._transform = self._model.transform
+
+        # Important: WinClipAD already implements compositional prompt ensemble here.
         self._model.build_text_feature_gallery(self.class_name)
+
+        self._log("WinCLIP model built.")
+        self._log(f"class_name: {self.class_name}")
+        self._log(f"dataset: {self.dataset}")
+        self._log(f"device: {self.device}")
 
     def _load_and_transform_rgb(self, image_path: str) -> torch.Tensor:
         image = Image.open(image_path).convert("RGB")
         return self._transform(image)
 
     def build_fewshot_gallery(self, good_image_paths: Sequence[str]) -> None:
+        """
+        Build the few-shot visual gallery from provided 'good' images.
+        Uses all provided images.
+        """
         if not good_image_paths:
             return
 
@@ -111,11 +152,22 @@ class WinCLIPAdapter:
         with torch.no_grad():
             self._model.build_image_feature_gallery(data)
 
+        self._log(f"Built few-shot gallery from {len(good_image_paths)} good image(s).")
+
     def predict(
         self,
         image_path: str,
         good_image_paths: Optional[Sequence[str]] = None,
     ) -> dict:
+        """
+        Run inference on a single image.
+
+        Returns:
+        - anomaly_score: image-level scalar derived from raw map max
+        - is_anomalous: thresholded image-level decision
+        - raw_heatmap: raw anomaly map from WinCLIP
+        - heatmap: normalized heatmap for visualization
+        """
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Input image not found: {image_path}")
 
@@ -128,20 +180,11 @@ class WinCLIPAdapter:
         with torch.no_grad():
             raw_score = self._model(data)
 
-        print("raw_score type:", type(raw_score))
-        if isinstance(raw_score, list):
-            print("raw_score list len:", len(raw_score))
-            if len(raw_score) > 0:
-                first = raw_score[0]
-                if torch.is_tensor(first):
-                    print("first tensor shape:", tuple(first.shape))
-                else:
-                    print("first item type:", type(first))
-        elif torch.is_tensor(raw_score):
-            print("raw_score tensor shape:", tuple(raw_score.shape))
+        self._debug_raw_score(raw_score)
 
         raw_heatmap, norm_heatmap = self._extract_heatmap(raw_score)
 
+        # Use raw map for image-level score, not normalized map.
         anomaly_score = float(raw_heatmap.max())
         is_anomalous = anomaly_score >= self.image_threshold
 
@@ -152,7 +195,24 @@ class WinCLIPAdapter:
             "heatmap": norm_heatmap,
         }
 
+    def _debug_raw_score(self, raw_score) -> None:
+        self._log("raw_score type:", type(raw_score))
+
+        if isinstance(raw_score, list):
+            self._log("raw_score list len:", len(raw_score))
+            if len(raw_score) > 0:
+                first = raw_score[0]
+                if torch.is_tensor(first):
+                    self._log("first tensor shape:", tuple(first.shape))
+                else:
+                    self._log("first item type:", type(first))
+        elif torch.is_tensor(raw_score):
+            self._log("raw_score tensor shape:", tuple(raw_score.shape))
+
     def _extract_heatmap(self, raw_score) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Extract raw and normalized 2D anomaly maps from model output.
+        """
         if isinstance(raw_score, list):
             if len(raw_score) == 0:
                 raise ValueError("Model returned an empty list.")
@@ -163,8 +223,13 @@ class WinCLIPAdapter:
         else:
             arr = np.asarray(raw_score, dtype=np.float32)
 
-        print("arr shape before squeeze:", np.asarray(arr).shape)
-        print("arr min/mean/max:", float(arr.min()), float(arr.mean()), float(arr.max()))
+        self._log("arr shape before squeeze:", np.asarray(arr).shape)
+        self._log(
+            "arr min/mean/max:",
+            float(arr.min()),
+            float(arr.mean()),
+            float(arr.max()),
+        )
 
         arr = np.squeeze(arr)
 
@@ -182,32 +247,91 @@ class WinCLIPAdapter:
 
         return raw_arr, norm_arr.astype(np.float32)
 
+    def make_mask(self, heatmap: np.ndarray) -> np.ndarray:
+        """
+        Create a binary mask from the normalized heatmap using percentile thresholding.
+        """
+        thr = np.percentile(heatmap, self.mask_percentile)
+        mask = (heatmap >= thr).astype(np.uint8) * 255
+        return mask
+
     def save_outputs(
-        self,
-        image_path: str,
-        heatmap: np.ndarray,
-        output_dir: str,
+            self,
+            image_path: str,
+            heatmap: np.ndarray,
+            output_dir: str,
     ) -> tuple[str, str]:
+        """
+        Save:
+        - border overlay based on the binary mask
+        - binary mask
+        """
         os.makedirs(output_dir, exist_ok=True)
 
         image = Image.open(image_path).convert("RGB")
         image = image.resize((heatmap.shape[1], heatmap.shape[0]))
         image_np = np.asarray(image).astype(np.uint8)
 
-        heatmap_uint8 = (heatmap * 255).clip(0, 255).astype(np.uint8)
+        stem = Path(image_path).stem
+
+        # Create mask from normalized heatmap
+        mask = self.make_mask(heatmap)
+        mask_bool = mask > 0
+
+        # Create border by subtracting eroded mask from original mask
+        border = np.zeros_like(mask_bool, dtype=bool)
+
+        # Simple 3x3 erosion implemented with NumPy only
+        h, w = mask_bool.shape
+        eroded = np.zeros_like(mask_bool, dtype=bool)
+
+        if h >= 3 and w >= 3:
+            eroded[1:-1, 1:-1] = (
+                    mask_bool[0:-2, 0:-2] &
+                    mask_bool[0:-2, 1:-1] &
+                    mask_bool[0:-2, 2:] &
+                    mask_bool[1:-1, 0:-2] &
+                    mask_bool[1:-1, 1:-1] &
+                    mask_bool[1:-1, 2:] &
+                    mask_bool[2:, 0:-2] &
+                    mask_bool[2:, 1:-1] &
+                    mask_bool[2:, 2:]
+            )
+
+        border = mask_bool & (~eroded)
+
+        # Optional: make border slightly thicker
+        thick_border = border.copy()
+        thick_border[:-1, :] |= border[1:, :]
+        thick_border[1:, :] |= border[:-1, :]
+        thick_border[:, :-1] |= border[:, 1:]
+        thick_border[:, 1:] |= border[:, :-1]
 
         overlay = image_np.copy()
-        overlay[..., 0] = np.maximum(overlay[..., 0], heatmap_uint8)
 
-        stem = Path(image_path).stem
+        # Draw red border
+        overlay[thick_border] = [255, 0, 0]
 
         heatmap_path = os.path.join(output_dir, f"{stem}_heatmap_overlay.png")
         Image.fromarray(overlay).save(heatmap_path)
-
-        thr = np.percentile(heatmap, self.mask_percentile)
-        mask = (heatmap >= thr).astype(np.uint8) * 255
 
         mask_path = os.path.join(output_dir, f"{stem}_mask.png")
         Image.fromarray(mask).save(mask_path)
 
         return heatmap_path, mask_path
+
+    def inspect_prompts(
+            self,
+            image_path: str,
+            top_k: int = 5,
+    ) -> dict:
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"Input image not found: {image_path}")
+
+        tensor = self._load_and_transform_rgb(image_path)
+        data = torch.stack([tensor], dim=0).to(self.device)
+
+        with torch.no_grad():
+            ranked = self._model.rank_prompts_for_image(data, top_k=top_k)
+
+        return ranked[0]
