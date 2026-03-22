@@ -1,6 +1,7 @@
 # [SBK] WinCLIP + Knowledge Graph
 
 **Student:** Igor Zamojski
+**WinCLIP implementation by:** https://github.com/caoyunkang/WinClip
 
 **WinCLIP implementation by:** https://github.com/caoyunkang/WinClip
 
