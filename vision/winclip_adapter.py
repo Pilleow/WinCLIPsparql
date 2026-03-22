@@ -11,17 +11,6 @@ from PIL import Image
 class WinCLIPAdapter:
     """
     Thin wrapper around the original caoyunkang/WinClip implementation.
-
-    Responsibilities:
-    - load the original WinClipAD model
-    - use its built-in compositional prompt ensemble via build_text_feature_gallery()
-    - optionally build few-shot image gallery
-    - run inference on a single image
-    - return a consistent output format for the rest of the project
-
-    Notes:
-    - Prompt ensembling is already implemented inside WinClipAD.build_text_feature_gallery().
-    - This adapter should stay lightweight and not duplicate WinCLIP internals.
     """
 
     def __init__(
@@ -52,6 +41,7 @@ class WinCLIPAdapter:
         self.mask_percentile = mask_percentile
         self.debug = debug
 
+        print("CUDA Available: ", torch.cuda.is_available())
         if device is None:
             if torch.cuda.is_available() and not use_cpu:
                 self.device = "cuda:0"
@@ -121,7 +111,6 @@ class WinCLIPAdapter:
         self._model.eval_mode()
         self._transform = self._model.transform
 
-        # Important: WinClipAD already implements compositional prompt ensemble here.
         self._model.build_text_feature_gallery(self.class_name)
 
         self._log("WinCLIP model built.")
@@ -184,7 +173,6 @@ class WinCLIPAdapter:
 
         raw_heatmap, norm_heatmap = self._extract_heatmap(raw_score)
 
-        # Use raw map for image-level score, not normalized map.
         anomaly_score = float(raw_heatmap.max())
         is_anomalous = anomaly_score >= self.image_threshold
 
@@ -274,14 +262,11 @@ class WinCLIPAdapter:
 
         stem = Path(image_path).stem
 
-        # Create mask from normalized heatmap
         mask = self.make_mask(heatmap)
         mask_bool = mask > 0
 
-        # Create border by subtracting eroded mask from original mask
         border = np.zeros_like(mask_bool, dtype=bool)
 
-        # Simple 3x3 erosion implemented with NumPy only
         h, w = mask_bool.shape
         eroded = np.zeros_like(mask_bool, dtype=bool)
 
@@ -300,7 +285,6 @@ class WinCLIPAdapter:
 
         border = mask_bool & (~eroded)
 
-        # Optional: make border slightly thicker
         thick_border = border.copy()
         thick_border[:-1, :] |= border[1:, :]
         thick_border[1:, :] |= border[:-1, :]
@@ -309,13 +293,12 @@ class WinCLIPAdapter:
 
         overlay = image_np.copy()
 
-        # Draw red border
         overlay[thick_border] = [255, 0, 0]
 
-        heatmap_path = os.path.join(output_dir, f"{stem}_heatmap_overlay.png")
+        heatmap_path = os.path.join(output_dir, f"heatmap_overlay.png")
         Image.fromarray(overlay).save(heatmap_path)
 
-        mask_path = os.path.join(output_dir, f"{stem}_mask.png")
+        mask_path = os.path.join(output_dir, f"mask.png")
         Image.fromarray(mask).save(mask_path)
 
         return heatmap_path, mask_path
