@@ -1,2 +1,16 @@
 numpy
 pillow
+torch
+torchvision
+open_clip_torch
+opencv-python
+scikit-image
+scikit-learn
+pandas
+seaborn
+tqdm
+matplotlib
+pyyaml
+ftfy
+regex
+tensorboard

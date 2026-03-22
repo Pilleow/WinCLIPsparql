@@ -5,17 +5,39 @@ from vision.winclip_adapter import WinCLIPAdapter
 
 
 def main():
-    image_path = "data/input/cable_bent_001.png"
+    image_path = "data/input/bottle/broken_large/003.png"
     output_dir = "data/output"
-    class_name = "cable"
+    class_name = "a top-down picture of a bottle with a small piece of neck broken off"
 
     if not os.path.exists(image_path):
         raise FileNotFoundError(f"Input image not found: {image_path}")
 
-    adapter = WinCLIPAdapter(threshold=0.12, mask_threshold=0.6)
+    # zero-shot
+    # good_images = []
 
-    print("Running vision component...")
-    result = adapter.predict(image_path)
+    # few-shot
+    good_images = [
+        # "data/input/bottle/good/000.png",
+        # "data/input/bottle/good/001.png",
+        # "data/input/bottle/good/002.png",
+        # "data/input/bottle/good/003.png",
+        # "data/input/bottle/good/004.png",
+    ]
+
+    adapter = WinCLIPAdapter(
+        repo_path="external/WinClip",
+        dataset="mvtec",
+        class_name=class_name,
+        image_size=240,
+        resolution=400,
+        use_cpu=False,
+    )
+
+    print("Running WinCLIP inference...")
+    result = adapter.predict(
+        image_path=image_path,
+        good_image_paths=good_images,
+    )
 
     heatmap_path, mask_path = adapter.save_outputs(
         image_path=image_path,
@@ -32,7 +54,12 @@ def main():
         "mask_path": mask_path,
     }
 
-    json_path = os.path.join(output_dir, f"{os.path.splitext(os.path.basename(image_path))[0]}_result.json")
+    os.makedirs(output_dir, exist_ok=True)
+    json_path = os.path.join(
+        output_dir,
+        f"{os.path.splitext(os.path.basename(image_path))[0]}_result.json",
+    )
+
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(final_output, f, indent=2, ensure_ascii=False)
 
