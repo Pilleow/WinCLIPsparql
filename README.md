@@ -2,6 +2,8 @@
 
 **Student:** Igor Zamojski
 
+**WinCLIP implementation by:** https://github.com/caoyunkang/WinClip
+
 ## 🎯 Project Goal
 
 The goal of this project is to build a simple demonstration pipeline that integrates **visual anomaly detection** with a **knowledge graph**.
