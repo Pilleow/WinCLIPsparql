@@ -4,3 +4,5 @@ data/output/*.png
 data/output/*.json
 data/samples/*.png
 data/input/*.png
+__pycache__/
+*.py[cod]
