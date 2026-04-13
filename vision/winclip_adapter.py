@@ -41,14 +41,10 @@ class WinCLIPAdapter:
         self.mask_percentile = mask_percentile
         self.debug = debug
 
-        print("CUDA Available: ", torch.cuda.is_available())
-        if device is None:
-            if torch.cuda.is_available() and not use_cpu:
-                self.device = "cuda:0"
-            else:
-                self.device = "cpu"
-        else:
-            self.device = device
+        print("CUDA Available:", torch.cuda.is_available())
+        print("MPS Built:", torch.backends.mps.is_built())
+        print("MPS Available:", torch.backends.mps.is_available())
+        self.device = self._get_best_device(device, use_cpu)
 
         self._model = None
         self._transform = None
@@ -56,6 +52,17 @@ class WinCLIPAdapter:
 
         self._import_winclip_code()
         self._build_model()
+
+    def _get_best_device(self, device: Optional[str], use_cpu: bool) -> str:
+        if device is not None:
+            return device
+        if use_cpu:
+            return "cpu"
+        if torch.cuda.is_available():
+            return "cuda:0"
+        if torch.backends.mps.is_built() and torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
 
     def _log(self, *args) -> None:
         if self.debug:
@@ -167,17 +174,22 @@ class WinCLIPAdapter:
         data = torch.stack([tensor], dim=0).to(self.device)
 
         with torch.no_grad():
-            raw_score = self._model(data)
+            raw_score = self._model(data, return_details=True)
 
-        self._debug_raw_score(raw_score)
+        # self._debug_raw_score(raw_score)
+        print(raw_score)
 
-        raw_heatmap, norm_heatmap = self._extract_heatmap(raw_score)
+        raw_heatmap, norm_heatmap = self._extract_heatmap(raw_score["fused_map"])
 
-        anomaly_score = float(raw_heatmap.max())
-        is_anomalous = anomaly_score >= self.image_threshold
+        textual_score = float(raw_score["zero_shot_score"][0])
+        visual_score = float(raw_score["visual_max_score"][0])
+        fused_score = float(raw_score["fused_image_score"][0])
+        is_anomalous = fused_score >= self.image_threshold
 
         return {
-            "anomaly_score": anomaly_score,
+            "textual_score": textual_score,
+            "visual_score": visual_score,
+            "fused_score": fused_score,
             "is_anomalous": is_anomalous,
             "raw_heatmap": raw_heatmap,
             "heatmap": norm_heatmap,

@@ -243,32 +243,84 @@ class WinClipAD(torch.nn.Module):
         anomaly_map = scale_anomaly_scores.reshape((N, self.grid_size[0], self.grid_size[1])).unsqueeze(1)
         return anomaly_map
 
-    def forward(self, images):
+    @torch.no_grad()
+    def calculate_zero_shot_image_score(self, visual_features):
+        last_features = visual_features[-1]  # expected shape: [N, D]
 
+        if last_features.ndim != 2:
+            raise ValueError(f"Unexpected last feature shape: {last_features.shape}")
+
+        probs = (100.0 * last_features @ self.text_features.T).softmax(dim=-1)
+        anomaly_score = probs[:, 1].cpu()
+
+        return anomaly_score
+
+    def forward(self, images, return_details=False):
         visual_features = self.encode_image(images)
+        zero_shot_score = self.calculate_zero_shot_image_score(visual_features)
         textual_anomaly_map = self.calculate_textual_anomaly_score(visual_features)
+
         if self.visual_gallery is not None:
             visual_anomaly_map = self.calculate_visual_anomaly_score(visual_features)
         else:
             visual_anomaly_map = textual_anomaly_map
 
         if self.fusion_version == 'visual':
-            anomaly_map = visual_anomaly_map
+            fused_anomaly_map = visual_anomaly_map
         elif self.fusion_version == 'textual':
-            anomaly_map = textual_anomaly_map
+            fused_anomaly_map = textual_anomaly_map
         else:
-            anomaly_map = 1. / (1. / textual_anomaly_map + 1. / visual_anomaly_map)
+            fused_anomaly_map = 1. / (1. / textual_anomaly_map + 1. / visual_anomaly_map)
 
-        anomaly_map = F.interpolate(anomaly_map, size=(self.out_size_h, self.out_size_w), mode='bilinear', align_corners=False)
-        am_np = anomaly_map.squeeze(1).cpu().numpy()
+        # upsample all maps to output resolution
+        textual_anomaly_map = F.interpolate(
+            textual_anomaly_map,
+            size=(self.out_size_h, self.out_size_w),
+            mode='bilinear',
+            align_corners=False
+        )
+        visual_anomaly_map = F.interpolate(
+            visual_anomaly_map,
+            size=(self.out_size_h, self.out_size_w),
+            mode='bilinear',
+            align_corners=False
+        )
+        fused_anomaly_map = F.interpolate(
+            fused_anomaly_map,
+            size=(self.out_size_h, self.out_size_w),
+            mode='bilinear',
+            align_corners=False
+        )
 
-        am_np_list = []
+        textual_np = textual_anomaly_map.squeeze(1).detach().cpu().numpy()
+        visual_np = visual_anomaly_map.squeeze(1).detach().cpu().numpy()
+        fused_np = fused_anomaly_map.squeeze(1).detach().cpu().numpy()
 
-        for i in range(am_np.shape[0]):
-            # am_np[i] = gaussian_filter(am_np[i], sigma=4)
-            am_np_list.append(am_np[i])
+        textual_list = [textual_np[i] for i in range(textual_np.shape[0])]
+        visual_list = [visual_np[i] for i in range(visual_np.shape[0])]
+        fused_list = [fused_np[i] for i in range(fused_np.shape[0])]
 
-        return am_np_list
+        # image-level score from visual/reference map
+        visual_max_score = visual_anomaly_map.flatten(1).max(dim=1)[0]
+
+        # ascore_W(x) = 0.5 * (ascore0(f(x)) + max_ij M^W_ij)
+        # in zero-shot, use ascore0 directly
+        if self.visual_gallery is not None:
+            fused_image_score = 0.5 * (zero_shot_score + visual_max_score)
+        else:
+            fused_image_score = zero_shot_score
+
+        if not return_details:
+            return fused_list
+
+        return {
+            "textual_map": textual_list,
+            "visual_map": visual_list,
+            "fused_map": fused_list,
+            "zero_shot_score": zero_shot_score.detach().cpu().numpy(),
+            "visual_max_score": visual_max_score.detach().cpu().numpy(),
+            "fused_image_score": fused_image_score.detach().cpu().numpy(),
+        }
 
     def train_mode(self):
         self.model.train()

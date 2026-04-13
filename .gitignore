@@ -2,6 +2,7 @@
 .idea
 data/output/*.png
 data/output/*.json
+data/output/*.csv
 data/samples/*.png
 data/input/*.png
 __pycache__/
