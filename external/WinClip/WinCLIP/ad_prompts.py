@@ -13,6 +13,10 @@ state_level_normal_prompts = [
     '{} with smooth surface',
     '{} with intact surface',
     '{} with intact rim',
+    '{} with complete structure',
+    '{} with uniform surface',
+    '{} with no visible damage',
+    '{} with a smooth continuous edge',
 ]
 
 state_level_abnormal_prompts = [
@@ -39,6 +43,14 @@ state_level_abnormal_prompts = [
     '{} with surface damage',
     '{} with a damaged rim',
     '{} with a broken rim',
+    '{} with a piece missing',
+    '{} with a fragment broken off',
+    '{} with structural damage',
+    '{} with an irregular edge',
+    '{} with visible interior damage',
+    '{} with a chipped opening',
+    '{} with broken material on the surface',
+    '{} with surface irregularity',
 ]
 
 template_level_prompts = [
@@ -51,4 +63,8 @@ template_level_prompts = [
     'a photo of a large {}',
     'a photo of a {} for visual inspection',
     'a photo of a {} for anomaly detection',
+    'a top-down view of a {}',
+    'a photo taken from above of a {}',
+    'an industrial inspection photo of a {}',
+    'a close inspection of a {}',
 ]

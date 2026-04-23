@@ -72,6 +72,8 @@ class WinClipAD(torch.nn.Module):
         self.abnormal_text_features = None
         self.grid_size = model.visual.grid_size
         self.visual_gallery = None
+        self.defect_type_features = None
+        self.defect_type_names = []
         print("self.grid_size",self.grid_size)
 
     @torch.no_grad()
@@ -153,6 +155,30 @@ class WinClipAD(torch.nn.Module):
 
             self.visual_gallery += [torch.cat(scale_features, dim=0)]
 
+
+    def build_defect_type_feature_gallery(self, defect_type_prompts: dict):
+        """
+        defect_type_prompts: {type_name: [prompt1, prompt2, ...]}
+        Prompts must already have the class name substituted (no {} placeholders).
+        """
+        self.defect_type_names = list(defect_type_prompts.keys())
+        type_features = []
+        for prompts in defect_type_prompts.values():
+            tokens = self.tokenizer(prompts).to(self.device)
+            with torch.no_grad():
+                feats = self.encode_text(tokens)       # [n_prompts, D]
+            feats = feats / feats.norm(dim=-1, keepdim=True)
+            avg = feats.mean(dim=0, keepdim=True)      # [1, D]
+            avg = avg / avg.norm(dim=-1, keepdim=True)
+            type_features.append(avg)
+        self.defect_type_features = torch.cat(type_features, dim=0)  # [n_types, D]
+
+    @torch.no_grad()
+    def calculate_defect_type_scores(self, visual_features):
+        """Returns softmax probabilities over defect types, shape [N, n_types]."""
+        last_features = visual_features[-1]  # [N, D]
+        probs = (100.0 * last_features @ self.defect_type_features.T).softmax(dim=-1)
+        return probs.cpu()
 
     def calculate_textual_anomaly_score(self, visual_features):
         N = visual_features[0].shape[0]
@@ -303,8 +329,6 @@ class WinClipAD(torch.nn.Module):
         # image-level score from visual/reference map
         visual_max_score = visual_anomaly_map.flatten(1).max(dim=1)[0]
 
-        # ascore_W(x) = 0.5 * (ascore0(f(x)) + max_ij M^W_ij)
-        # in zero-shot, use ascore0 directly
         if self.visual_gallery is not None:
             fused_image_score = 0.5 * (zero_shot_score + visual_max_score)
         else:
@@ -313,7 +337,7 @@ class WinClipAD(torch.nn.Module):
         if not return_details:
             return fused_list
 
-        return {
+        result = {
             "textual_map": textual_list,
             "visual_map": visual_list,
             "fused_map": fused_list,
@@ -322,41 +346,17 @@ class WinClipAD(torch.nn.Module):
             "fused_image_score": fused_image_score.detach().cpu().numpy(),
         }
 
+        if self.defect_type_features is not None:
+            type_probs = self.calculate_defect_type_scores(visual_features)  # [N, n_types]
+            result["defect_type_scores"] = [
+                {name: float(type_probs[i, j]) for j, name in enumerate(self.defect_type_names)}
+                for i in range(type_probs.shape[0])
+            ]
+
+        return result
+
     def train_mode(self):
         self.model.train()
 
     def eval_mode(self):
         self.model.eval()
-
-    @torch.no_grad()
-    def rank_prompts_for_image(self, images, top_k=5):
-        visual_features = self.encode_image(images)
-
-        # use the last scale as a simple image-level summary
-        last_features = visual_features[-1]  # shape: [N, D]
-        if last_features.ndim != 2:
-            raise ValueError(f"Unexpected feature shape: {last_features.shape}")
-
-        normal_scores = (100.0 * last_features @ self.normal_text_features.T).softmax(dim=-1)
-        abnormal_scores = (100.0 * last_features @ self.abnormal_text_features.T).softmax(dim=-1)
-
-        results = []
-        for i in range(last_features.shape[0]):
-            n_scores = normal_scores[i]
-            a_scores = abnormal_scores[i]
-
-            top_n_vals, top_n_idx = torch.topk(n_scores, k=min(top_k, n_scores.shape[0]))
-            top_a_vals, top_a_idx = torch.topk(a_scores, k=min(top_k, a_scores.shape[0]))
-
-            results.append({
-                "top_normal_prompts": [
-                    (self.normal_phrases[idx], float(val))
-                    for val, idx in zip(top_n_vals.cpu(), top_n_idx.cpu())
-                ],
-                "top_abnormal_prompts": [
-                    (self.abnormal_phrases[idx], float(val))
-                    for val, idx in zip(top_a_vals.cpu(), top_a_idx.cpu())
-                ],
-            })
-
-        return results

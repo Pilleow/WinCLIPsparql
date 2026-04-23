@@ -6,11 +6,16 @@ from typing import Optional, Sequence
 import numpy as np
 import torch
 from PIL import Image
+from skimage.filters import threshold_otsu
+
+from knowledge.graph import load_defect_types
 
 
 class WinCLIPAdapter:
     """
     Thin wrapper around the original caoyunkang/WinClip implementation.
+    Defect type classification is driven by the RDF knowledge graph:
+    each candidate defect type maps to an IRI from the ontology.
     """
 
     def __init__(
@@ -25,6 +30,7 @@ class WinCLIPAdapter:
         pretrained_dataset: str = "laion400m_e32",
         image_threshold: float = 0.01,
         mask_percentile: float = 90.0,
+        kg_path: str = "knowledge/ontology.ttl",
         device: Optional[str] = None,
         use_cpu: bool = False,
         debug: bool = True,
@@ -39,6 +45,7 @@ class WinCLIPAdapter:
         self.pretrained_dataset = pretrained_dataset
         self.image_threshold = image_threshold
         self.mask_percentile = mask_percentile
+        self.kg_path = Path(kg_path)
         self.debug = debug
 
         print("CUDA Available:", torch.cuda.is_available())
@@ -49,6 +56,8 @@ class WinCLIPAdapter:
         self._model = None
         self._transform = None
         self.WinClipAD = None
+        # IRI → human-readable label, populated from the KG
+        self._iri_to_label: dict[str, str] = {}
 
         self._import_winclip_code()
         self._build_model()
@@ -120,10 +129,23 @@ class WinCLIPAdapter:
 
         self._model.build_text_feature_gallery(self.class_name)
 
+        # Load defect type nodes from the RDF knowledge graph.
+        # Keys in defect_types are IRI strings; prompts use '{}' as class placeholder.
+        defect_types = load_defect_types(self.kg_path)
+        self._iri_to_label = {info["iri"]: info["label"] for info in defect_types.values()}
+
+        # Substitute the class name into prompt templates before encoding.
+        defect_prompts = {
+            iri: [p.format(self.class_name) for p in info["prompts"]]
+            for iri, info in defect_types.items()
+        }
+        self._model.build_defect_type_feature_gallery(defect_prompts)
+
         self._log("WinCLIP model built.")
         self._log(f"class_name: {self.class_name}")
         self._log(f"dataset: {self.dataset}")
         self._log(f"device: {self.device}")
+        self._log(f"defect types loaded from KG: {list(self._iri_to_label.values())}")
 
     def _load_and_transform_rgb(self, image_path: str) -> torch.Tensor:
         image = Image.open(image_path).convert("RGB")
@@ -158,11 +180,13 @@ class WinCLIPAdapter:
         """
         Run inference on a single image.
 
-        Returns:
-        - anomaly_score: image-level scalar derived from raw map max
-        - is_anomalous: thresholded image-level decision
-        - raw_heatmap: raw anomaly map from WinCLIP
-        - heatmap: normalized heatmap for visualization
+        Returns a dict with:
+          - textual_score, visual_score, fused_score: image-level anomaly scores
+          - is_anomalous: bool
+          - defect_type_iri:   IRI of the best-matching ex:DefectType node in the KG
+          - defect_type_label: human-readable label of that node
+          - defect_type_scores: {iri: probability} for all defect type nodes
+          - raw_heatmap, heatmap: pixel-level anomaly maps
         """
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Input image not found: {image_path}")
@@ -176,9 +200,6 @@ class WinCLIPAdapter:
         with torch.no_grad():
             raw_score = self._model(data, return_details=True)
 
-        # self._debug_raw_score(raw_score)
-        print(raw_score)
-
         raw_heatmap, norm_heatmap = self._extract_heatmap(raw_score["fused_map"])
 
         textual_score = float(raw_score["zero_shot_score"][0])
@@ -186,28 +207,25 @@ class WinCLIPAdapter:
         fused_score = float(raw_score["fused_image_score"][0])
         is_anomalous = fused_score >= self.image_threshold
 
+        defect_type_scores: dict[str, float] = raw_score.get("defect_type_scores", [{}])[0]
+        if is_anomalous and defect_type_scores:
+            best_iri = max(defect_type_scores, key=defect_type_scores.get)
+            best_label = self._iri_to_label.get(best_iri, best_iri.split("#")[-1])
+        else:
+            best_iri = None
+            best_label = None
+
         return {
             "textual_score": textual_score,
             "visual_score": visual_score,
             "fused_score": fused_score,
             "is_anomalous": is_anomalous,
+            "defect_type_iri": best_iri,
+            "defect_type_label": best_label,
+            "defect_type_scores": defect_type_scores,
             "raw_heatmap": raw_heatmap,
             "heatmap": norm_heatmap,
         }
-
-    def _debug_raw_score(self, raw_score) -> None:
-        self._log("raw_score type:", type(raw_score))
-
-        if isinstance(raw_score, list):
-            self._log("raw_score list len:", len(raw_score))
-            if len(raw_score) > 0:
-                first = raw_score[0]
-                if torch.is_tensor(first):
-                    self._log("first tensor shape:", tuple(first.shape))
-                else:
-                    self._log("first item type:", type(first))
-        elif torch.is_tensor(raw_score):
-            self._log("raw_score tensor shape:", tuple(raw_score.shape))
 
     def _extract_heatmap(self, raw_score) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -249,9 +267,16 @@ class WinCLIPAdapter:
 
     def make_mask(self, heatmap: np.ndarray, k: float = 2) -> np.ndarray:
         """
-        Create a binary mask from the normalized heatmap using percentile thresholding.
+        Create a binary mask using Otsu's thresholding, which automatically
+        finds the optimal split between background and anomalous pixels.
+        Works for both small anomalies (few bright pixels) and large anomalies
+        (large bright region) without manual tuning.
+        Falls back to mean + k*std if Otsu fails (e.g. flat heatmap).
         """
-        thr = heatmap.mean() + k * heatmap.std()
+        try:
+            thr = threshold_otsu(heatmap)
+        except ValueError:
+            thr = heatmap.mean() + k * heatmap.std()
         mask = (heatmap >= thr).astype(np.uint8) * 255
         return mask
 
@@ -260,11 +285,11 @@ class WinCLIPAdapter:
             image_path: str,
             heatmap: np.ndarray,
             output_dir: str,
+            is_anomalous: bool = True,
     ) -> tuple[str, str]:
         """
-        Save:
-        - border overlay based on the binary mask
-        - binary mask
+        Save border overlay and binary mask for the given heatmap.
+        If is_anomalous=False the mask is saved as all-black (no anomaly).
         """
         os.makedirs(output_dir, exist_ok=True)
 
@@ -272,7 +297,10 @@ class WinCLIPAdapter:
         image = image.resize((heatmap.shape[1], heatmap.shape[0]))
         image_np = np.asarray(image).astype(np.uint8)
 
-        mask = self.make_mask(heatmap)
+        if not is_anomalous:
+            mask = np.zeros(heatmap.shape, dtype=np.uint8)
+        else:
+            mask = self.make_mask(heatmap)
         mask_bool = mask > 0
 
         h, w = mask_bool.shape
@@ -300,29 +328,12 @@ class WinCLIPAdapter:
         thick_border[:, 1:] |= border[:, :-1]
 
         overlay = image_np.copy()
-
         overlay[thick_border] = [255, 0, 0]
 
-        heatmap_path = os.path.join(output_dir, f"heatmap_overlay.png")
+        heatmap_path = os.path.join(output_dir, "heatmap_overlay.png")
         Image.fromarray(overlay).save(heatmap_path)
 
-        mask_path = os.path.join(output_dir, f"mask.png")
+        mask_path = os.path.join(output_dir, "mask.png")
         Image.fromarray(mask).save(mask_path)
 
         return heatmap_path, mask_path
-
-    def inspect_prompts(
-            self,
-            image_path: str,
-            top_k: int = 5,
-    ) -> dict:
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Input image not found: {image_path}")
-
-        tensor = self._load_and_transform_rgb(image_path)
-        data = torch.stack([tensor], dim=0).to(self.device)
-
-        with torch.no_grad():
-            ranked = self._model.rank_prompts_for_image(data, top_k=top_k)
-
-        return ranked[0]

@@ -14,3 +14,4 @@ pyyaml
 ftfy
 regex
 tensorboard
+rdflib

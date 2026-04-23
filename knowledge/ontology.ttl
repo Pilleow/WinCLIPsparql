@@ -1,0 +1,170 @@
+@prefix ex:   <http://example.org/defect#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# ─── Classes ────────────────────────────────────────────────────────────────
+
+ex:DefectType a owl:Class ;
+    rdfs:label "Defect Type" .
+
+ex:Cause a owl:Class ;
+    rdfs:label "Cause" .
+
+ex:Action a owl:Class ;
+    rdfs:label "Recommended Action" .
+
+# ─── Properties ─────────────────────────────────────────────────────────────
+
+ex:promptTemplate a owl:DatatypeProperty ;
+    rdfs:domain ex:DefectType ;
+    rdfs:range  xsd:string ;
+    rdfs:comment "CLIP prompt template; use '{}' as placeholder for the object class name." .
+
+ex:hasCause a owl:ObjectProperty ;
+    rdfs:domain ex:DefectType ;
+    rdfs:range  ex:Cause .
+
+ex:recommendedAction a owl:ObjectProperty ;
+    rdfs:domain ex:DefectType ;
+    rdfs:range  ex:Action .
+
+# ─── Causes ─────────────────────────────────────────────────────────────────
+
+ex:AbrasiveContact a ex:Cause ;
+    rdfs:label "abrasive contact" .
+
+ex:MechanicalImpact a ex:Cause ;
+    rdfs:label "mechanical impact" .
+
+ex:MaterialFatigue a ex:Cause ;
+    rdfs:label "material fatigue" .
+
+ex:ProcessContamination a ex:Cause ;
+    rdfs:label "process contamination" .
+
+ex:AssemblyError a ex:Cause ;
+    rdfs:label "assembly error" .
+
+ex:WearAndTear a ex:Cause ;
+    rdfs:label "wear and tear" .
+
+ex:ManufacturingDefect a ex:Cause ;
+    rdfs:label "manufacturing defect" .
+
+# ─── Actions ────────────────────────────────────────────────────────────────
+
+ex:LineStop a ex:Action ;
+    rdfs:label "stop production line" .
+
+ex:ReplaceGuideRail a ex:Action ;
+    rdfs:label "replace guide rail" .
+
+ex:CleanSurface a ex:Action ;
+    rdfs:label "clean surface" .
+
+ex:ReplaceComponent a ex:Action ;
+    rdfs:label "replace component" .
+
+ex:InspectTool a ex:Action ;
+    rdfs:label "inspect tooling" .
+
+ex:ScrapPart a ex:Action ;
+    rdfs:label "scrap part" .
+
+ex:AdjustProcess a ex:Action ;
+    rdfs:label "adjust process parameters" .
+
+# ─── Defect Types ────────────────────────────────────────────────────────────
+
+ex:Crack a ex:DefectType ;
+    rdfs:label "crack" ;
+    ex:promptTemplate "a photo of a {} with a crack" ;
+    ex:promptTemplate "a photo of a {} with cracked surface" ;
+    ex:promptTemplate "a photo of a {} with broken glass" ;
+    ex:promptTemplate "a photo of a cracked {}" ;
+    ex:hasCause ex:MechanicalImpact ;
+    ex:hasCause ex:MaterialFatigue ;
+    ex:recommendedAction ex:LineStop ;
+    ex:recommendedAction ex:ScrapPart .
+
+ex:Scratch a ex:DefectType ;
+    rdfs:label "scratch" ;
+    ex:promptTemplate "a photo of a {} with a scratch" ;
+    ex:promptTemplate "a photo of a {} with scratches" ;
+    ex:promptTemplate "a photo of a scratched {}" ;
+    ex:hasCause ex:AbrasiveContact ;
+    ex:hasCause ex:WearAndTear ;
+    ex:recommendedAction ex:ReplaceGuideRail ;
+    ex:recommendedAction ex:InspectTool .
+
+ex:Chip a ex:DefectType ;
+    rdfs:label "chip" ;
+    ex:promptTemplate "a photo of a {} with a chip" ;
+    ex:promptTemplate "a photo of a {} with chipped surface" ;
+    ex:promptTemplate "a photo of a {} with chipped glass" ;
+    ex:promptTemplate "a photo of a chipped {}" ;
+    ex:hasCause ex:MechanicalImpact ;
+    ex:recommendedAction ex:ScrapPart ;
+    ex:recommendedAction ex:InspectTool .
+
+ex:Bend a ex:DefectType ;
+    rdfs:label "bend" ;
+    ex:promptTemplate "a photo of a bent {}" ;
+    ex:promptTemplate "a photo of a {} with a bent part" ;
+    ex:promptTemplate "a photo of a deformed {}" ;
+    ex:promptTemplate "a photo of a {} with deformation" ;
+    ex:hasCause ex:MechanicalImpact ;
+    ex:hasCause ex:AssemblyError ;
+    ex:recommendedAction ex:AdjustProcess ;
+    ex:recommendedAction ex:ScrapPart .
+
+ex:Contamination a ex:DefectType ;
+    rdfs:label "contamination" ;
+    ex:promptTemplate "a photo of a {} with contamination" ;
+    ex:promptTemplate "a photo of a {} with foreign object" ;
+    ex:promptTemplate "a photo of a {} with unknown object" ;
+    ex:promptTemplate "a photo of a contaminated {}" ;
+    ex:hasCause ex:ProcessContamination ;
+    ex:recommendedAction ex:CleanSurface ;
+    ex:recommendedAction ex:AdjustProcess .
+
+ex:Stain a ex:DefectType ;
+    rdfs:label "stain" ;
+    ex:promptTemplate "a photo of a {} with a stain" ;
+    ex:promptTemplate "a photo of a {} with stains" ;
+    ex:promptTemplate "a photo of a stained {}" ;
+    ex:promptTemplate "a photo of a {} with discoloration" ;
+    ex:hasCause ex:ProcessContamination ;
+    ex:hasCause ex:WearAndTear ;
+    ex:recommendedAction ex:CleanSurface .
+
+ex:MissingPart a ex:DefectType ;
+    rdfs:label "missing part" ;
+    ex:promptTemplate "a photo of a {} with a missing part" ;
+    ex:promptTemplate "a photo of a {} with missing piece" ;
+    ex:promptTemplate "a photo of a {} with missing component" ;
+    ex:hasCause ex:AssemblyError ;
+    ex:hasCause ex:ManufacturingDefect ;
+    ex:recommendedAction ex:LineStop ;
+    ex:recommendedAction ex:ReplaceComponent .
+
+ex:Break a ex:DefectType ;
+    rdfs:label "break" ;
+    ex:promptTemplate "a photo of a damaged {}" ;
+    ex:promptTemplate "a photo of a broken {}" ;
+    ex:promptTemplate "a photo of a {} with broken part" ;
+    ex:promptTemplate "a photo of a defective {}" ;
+    ex:hasCause ex:MechanicalImpact ;
+    ex:hasCause ex:MaterialFatigue ;
+    ex:recommendedAction ex:LineStop ;
+    ex:recommendedAction ex:ScrapPart .
+
+ex:Thread a ex:DefectType ;
+    rdfs:label "thread" ;
+    ex:promptTemplate "a photo of a {} with thread" ;
+    ex:promptTemplate "a photo of a {} with fiber" ;
+    ex:promptTemplate "a photo of a {} with thread contamination" ;
+    ex:hasCause ex:ProcessContamination ;
+    ex:recommendedAction ex:CleanSurface ;
+    ex:recommendedAction ex:InspectTool .
