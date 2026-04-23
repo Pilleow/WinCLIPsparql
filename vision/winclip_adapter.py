@@ -5,7 +5,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from skimage.filters import threshold_otsu
 
 from knowledge.graph import load_defect_types
@@ -29,6 +29,7 @@ class WinCLIPAdapter:
         backbone: str = "ViT-B-16-plus-240",
         pretrained_dataset: str = "laion400m_e32",
         image_threshold: float = 0.01,
+        mask_mod: float = 0.2,
         mask_percentile: float = 90.0,
         kg_path: str = "knowledge/ontology.ttl",
         device: Optional[str] = None,
@@ -44,6 +45,7 @@ class WinCLIPAdapter:
         self.backbone = backbone
         self.pretrained_dataset = pretrained_dataset
         self.image_threshold = image_threshold
+        self.mask_mod = mask_mod
         self.mask_percentile = mask_percentile
         self.kg_path = Path(kg_path)
         self.debug = debug
@@ -131,7 +133,7 @@ class WinCLIPAdapter:
 
         # Load defect type nodes from the RDF knowledge graph.
         # Keys in defect_types are IRI strings; prompts use '{}' as class placeholder.
-        defect_types = load_defect_types(self.kg_path)
+        defect_types = load_defect_types(self.kg_path, class_name=self.class_name)
         self._iri_to_label = {info["iri"]: info["label"] for info in defect_types.values()}
 
         # Substitute the class name into prompt templates before encoding.
@@ -275,6 +277,8 @@ class WinCLIPAdapter:
         """
         try:
             thr = threshold_otsu(heatmap)
+            thr = thr + self.mask_mod * (1 - thr)
+            print("treshold: ", thr)
         except ValueError:
             thr = heatmap.mean() + k * heatmap.std()
         mask = (heatmap >= thr).astype(np.uint8) * 255
@@ -286,6 +290,7 @@ class WinCLIPAdapter:
             heatmap: np.ndarray,
             output_dir: str,
             is_anomalous: bool = True,
+            label: str = ""
     ) -> tuple[str, str]:
         """
         Save border overlay and binary mask for the given heatmap.
@@ -330,10 +335,25 @@ class WinCLIPAdapter:
         overlay = image_np.copy()
         overlay[thick_border] = [255, 0, 0]
 
+        overlay_img = Image.fromarray(overlay)
+        draw = ImageDraw.Draw(overlay_img)
+
+        text = label if is_anomalous else "normal"
+        color = (255, 0, 0) if is_anomalous else (0, 255, 0)
+
+        font = ImageFont.load_default(30)
+
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+
+        padding = 10
+        x = overlay_img.width - text_width - padding
+        y = overlay_img.height - text_height - padding
+
+        draw.text((x, y), text, fill=color, font=font)
+
         heatmap_path = os.path.join(output_dir, "heatmap_overlay.png")
-        Image.fromarray(overlay).save(heatmap_path)
+        overlay_img.save(heatmap_path)
 
-        mask_path = os.path.join(output_dir, "mask.png")
-        Image.fromarray(mask).save(mask_path)
-
-        return heatmap_path, mask_path
+        return heatmap_path, ""

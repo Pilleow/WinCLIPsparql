@@ -10,7 +10,7 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).parent.parent))  # project root
 
 from vision.winclip_adapter import WinCLIPAdapter
-from src.thresholds import save_threshold
+from src.config import save_config
 
 
 def list_image_files(folder: Path) -> list[Path]:
@@ -83,7 +83,7 @@ def evaluate_class_folders(
     if debug:
         print(f"Good scores: mean={good_arr.mean():.4f} std={good_arr.std():.4f}")
     print(f"Calibrated threshold (mean + {threshold_k}σ): {threshold:.6f}")
-    save_threshold(class_name, threshold)
+    save_config(class_name, threshold)
 
     # ── 2. Score anomaly folders ──────────────────────────────────────────────
     anomaly_folders = sorted([

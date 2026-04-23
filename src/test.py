@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))  # project root
 
 from vision.winclip_adapter import WinCLIPAdapter
-from src.thresholds import load_threshold
+from src.config import load_config
 
 
 def list_image_files(folder: Path) -> list[Path]:
@@ -73,6 +73,7 @@ def process_image(adapter, image_path: str, class_name: str,
         heatmap=result["heatmap"],
         output_dir=image_output_dir,
         is_anomalous=result["is_anomalous"],
+        label=result["defect_type_label"]
     )
 
     final_output = {
@@ -153,14 +154,14 @@ def main():
             parser.error(f"Good folder not found: {good_dir}")
         good_images = [str(p) for p in list_image_files(good_dir)]
 
-    threshold = load_threshold(class_name, default=0.01)
-    print(f"Using threshold: {threshold:.6f}")
+    conf = load_config(class_name)
 
     adapter = WinCLIPAdapter(
         repo_path="external/WinClip",
         dataset="mvtec",
         class_name=class_name,
-        image_threshold=threshold,
+        image_threshold=conf['anomaly_thr'],
+        mask_mod=conf['mask_mod'],
         debug=args.debug,
     )
 

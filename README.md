@@ -1,72 +1,79 @@
-# [SBK] WinCLIP + Knowledge Graph
+# WinCLIP + Graf Wiedzy RDF
 
-**Student:** Igor Zamojski
+**Student:** Igor Zamojski  
+**Implementacja WinCLIP:** https://github.com/caoyunkang/WinClip
 
-**WinCLIP implementation by:** https://github.com/caoyunkang/WinClip
+---
 
-## 🎯 Project Goal
+## Cel projektu
 
-The goal of this project is to build a simple demonstration pipeline that integrates **visual anomaly detection** with a **knowledge graph**.
+Projekt demonstruje integrację **detekcji anomalii wizualnych** (WinCLIP) z **grafem wiedzy RDF**. Model wykrywa defekty na zdjęciach elementów przemysłowych z zestawu MVTec AD (butelki, siatki), a wynik mapowany jest na węzeł ontologii. Stamtąd - przez zapytania SPARQL - pobierane są przyczyny defektu i zalecane działania naprawcze.
 
-A WinCLIP model (zero-/few-shot, based on CLIP) is used to detect and segment anomalies in selected classes from industrial datasets. The model output is then mapped directly to an **IRI node in an RDF knowledge graph**.  
+---
 
-From a user interface (UI), it is possible to execute **SPARQL queries** to retrieve recommended actions or mitigations for a given anomaly.
+## Technologie
 
-## 📝 Description
+- **CLIP** - model wizyjno-językowy mapujący obrazy i tekst do wspólnej przestrzeni osadzeń (cosine similarity)
+- **WinCLIP** - detekcja anomalii przez wieloskalowe okno przesuwne + porównanie z galerią dobrych obrazów
+- **RDF / Turtle** - ontologia defektów (`knowledge/ontology.ttl`)
+- **rdflib** - parsowanie ontologii w Pythonie
+- **SPARQL** - zapytania po grafie wiedzy
 
-### 1. Data Selection (small subset)
+---
 
-A small subset of MVTec data is used for demonstration.
+## Instalacja
 
-### 2. WinCLIP Inference (zero-/few-shot)
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 
-The project uses an existing implementation of WinCLIP:
-- zero-shot anomaly detection (no training required)
-- optional few-shot with 1-2 "good" images
-- simple prompt ensemble for:
-  - normal state
-  - anomalous state + defect type
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+```
 
-The focus is on **demonstration**, not model optimisation.
+---
 
-### 3. Mapping → Knowledge Graph Node
+## Struktura danych wejściowych
 
-The model output (predicted defect type) is mapped to a specific IRI, e.g.: `ex:defect/mvtec/contamination`
+```
+data/input/<klasa>/
+    good/            ← obrazy referencyjne (bez defektów)
+    broken_large/    ← obrazy testowe
+    broken_small/
+    contamination/
+```
 
-A minimal RDF schema is defined with:
+---
 
-- `ex:DefectType` (e.g. scratch, contamination)
-- `ex:Cause` (e.g. abrasive_contact)
-- `ex:Action` (e.g. line_stop, replace_guide_rail)
+## Uruchomienie
 
-### 4. Queries and Recommendations
+### Kalibracja progu (train)
+```bash
+python3 src/train.py bottle
+```
 
-Simple SPARQL queries are used to retrieve recommendations.
+### Testowanie (test)
+```bash
+python3 src/test.py bottle "broken_small/*.png" "broken_large/*.png" "contamination/*.png" "good/*.png"
+```
 
-Example:
-> "Get recommended actions for a given defect type"
+---
 
-Results are displayed in the UI together with:
-- anomaly mask / heatmap
-- predicted label
-- associated actions and causes
+## Wyniki
 
-### 5. Evaluation (lightweight)
+Dla każdego obrazu generowany jest folder `data/output/<podfolder>-<id>/` z:
+- `result.json` - wyniki detekcji i klasyfikacji
+- `heatmap_overlay.png` - oryginalne zdjęcie wraz z zaznaczoną anomalią
 
-The evaluation focuses on demonstrating functionality, not achieving SOTA performance.
+---
 
-For selected classes:
-- image-level AUROC (i-AUROC)
-- pixel-level AUROC (p-AUROC)
-- qualitative visual results (screenshots)
+## Ontologia (`knowledge/ontology.ttl`)
 
-WinCLIP reports strong performance on MVTec AD and VisA in zero-/few-shot settings - this project only verifies the pipeline on a small subset.
+Prosta hierarchia RDF:
 
-**Note:**  
-
-The ontology and recommended actions do not need to be fully realistic - the goal is to demonstrate integration capabilities.
-
-## ⚠️ Disclaimer
-
-This project is a **proof-of-concept demo**.  
-It is not intended for production use or real industrial deployment.
+```
+ex:DefectType  →  ex:hasCause          →  ex:Cause
+               →  ex:recommendedAction →  ex:Action
+               →  ex:promptTemplate       (prompt CLIP)
+               →  ex:applicableToClass    (np. "bottle", "grid")
+```

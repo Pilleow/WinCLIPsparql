@@ -7,7 +7,7 @@ EX = Namespace("http://example.org/defect#")
 _DEFAULT_TTL = Path(__file__).parent / "ontology.ttl"
 
 
-def load_defect_types(ttl_path: str | Path = _DEFAULT_TTL) -> dict[str, dict]:
+def load_defect_types(ttl_path: str | Path = _DEFAULT_TTL, class_name: str = "") -> dict[str, dict]:
     """
     Parse the RDF ontology and return all ex:DefectType nodes.
 
@@ -33,6 +33,9 @@ def load_defect_types(ttl_path: str | Path = _DEFAULT_TTL) -> dict[str, dict]:
         label_node = g.value(subject, RDFS.label)
         label = str(label_node) if label_node is not None else iri.split("#")[-1]
         prompts = [str(o) for o in g.objects(subject, EX.promptTemplate)]
+
+        if len(class_name) > 0 and str(g.value(subject, EX.applicableToClass)) != class_name:
+            continue
 
         if not prompts:
             raise ValueError(

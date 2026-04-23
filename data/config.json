@@ -1,0 +1,10 @@
+{
+  "bottle": {
+    "anomaly_thr": 0.011054638137056944,
+    "mask_mod": 0.1
+  },
+  "metal_nut": {
+    "anomaly_thr": 0.009999999999999999,
+    "mask_mod": 0.7
+  }
+}
