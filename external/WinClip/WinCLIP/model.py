@@ -174,10 +174,61 @@ class WinClipAD(torch.nn.Module):
         self.defect_type_features = torch.cat(type_features, dim=0)  # [n_types, D]
 
     @torch.no_grad()
-    def calculate_defect_type_scores(self, visual_features):
-        """Returns softmax probabilities over defect types, shape [N, n_types]."""
-        last_features = visual_features[-1]  # [N, D]
-        probs = (100.0 * last_features @ self.defect_type_features.T).softmax(dim=-1)
+    def calculate_defect_type_scores(self, visual_features, top_k: int = 5):
+        """
+        Classify defect type using the top-K most anomalous patch embeddings
+        (ranked by distance from the good-image gallery) rather than the global
+        CLS token.  This avoids the "all bottles look the same globally" problem
+        where the CLS token is dominated by object class appearance rather than
+        the local defect appearance.
+
+        Falls back to the global CLS token when no visual gallery is available.
+        """
+        if self.visual_gallery is None:
+            # zero-shot fallback: use global CLS token
+            query = visual_features[-1]  # [N, D]
+            query = query / query.norm(dim=-1, keepdim=True)
+            probs = (100.0 * query @ self.defect_type_features.T).softmax(dim=-1)
+            return probs.cpu()
+
+        N = visual_features[0].shape[0]
+
+        # --- collect per-window features and anomaly scores across all scales ---
+        cur_scale_idx = 0
+        cur_gallery = self.visual_gallery[cur_scale_idx]  # [n_ref, D]
+
+        all_feats_per_image  = [[] for _ in range(N)]
+        all_scores_per_image = [[] for _ in range(N)]
+
+        for indx, features in enumerate(visual_features):
+            if indx in self.scale_begin_indx[1:]:
+                cur_scale_idx += 1
+                cur_gallery = self.visual_gallery[cur_scale_idx]
+
+            # anomaly score per image at this window position
+            sim     = (features @ cur_gallery.T).max(dim=1)[0]  # [N]
+            anomaly = 0.5 * (1.0 - sim)                          # [N]
+
+            for i in range(N):
+                all_feats_per_image[i].append(features[i])   # [D]
+                all_scores_per_image[i].append(anomaly[i])   # scalar
+
+        # --- for each image: average the top-K most anomalous patch embeddings ---
+        queries = []
+        for i in range(N):
+            feats_i  = torch.stack(all_feats_per_image[i],  dim=0)  # [W, D]
+            scores_i = torch.stack(all_scores_per_image[i], dim=0)  # [W]
+
+            K = min(top_k, feats_i.shape[0])
+            top_idx  = scores_i.topk(K).indices
+            top_feats = feats_i[top_idx]                             # [K, D]
+
+            query = top_feats.mean(dim=0)                            # [D]
+            query = query / query.norm()
+            queries.append(query)
+
+        queries = torch.stack(queries, dim=0)  # [N, D]
+        probs   = (100.0 * queries @ self.defect_type_features.T).softmax(dim=-1)
         return probs.cpu()
 
     def calculate_textual_anomaly_score(self, visual_features):
